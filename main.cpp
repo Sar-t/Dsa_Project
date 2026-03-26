@@ -6,6 +6,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <fstream>
+#include <algorithm>
 
 using namespace std;
 
@@ -63,6 +64,12 @@ void edit(TreeNode *root, TreeNode *pwd, string path);
 void cat(TreeNode *root, TreeNode *pwd, string path);
 void chmod(TreeNode *root, TreeNode *pwd, string path, string new_modes);
 void clear_screen();
+int compileFile(TreeNode *root, TreeNode *pwd, string path);
+void runFile(TreeNode *root, TreeNode *pwd, string path);
+void smartFind(TreeNode* root, string query);
+void collectFiles(TreeNode* node, string path,vector<pair<string,string>>& files);
+string buildJSON(vector<pair<string,string>>& files, string query);
+string sendRequest(string jsonData);
 
 int main()
 {
@@ -311,6 +318,47 @@ int main()
         {
             break;
         }
+        else if (args.front() == "compile")
+        {
+            args.pop_front();
+            if (args.empty())
+            {
+                cout << "compile: missing operand\n";
+            }
+            else
+            {
+                compileFile(root, pwd, args.front());
+            }
+        }
+        else if (args.front() == "run")
+        {
+            args.pop_front();
+            if (args.empty())
+            {
+                cout << "run: missing operand\n";
+            }
+            else
+            {
+                runFile(root, pwd, args.front());
+            }
+        }
+        else if (args.front() == "smartfind")
+        {
+            args.pop_front();
+
+            if (args.empty())
+            {
+                cout << "smartfind: missing query\n";
+            }
+            else
+            {
+                string query = "";
+                for (auto &w : args)
+                    query += w + " ";
+
+                smartFind(root, query);
+            }
+        }
         else
         {
             std::cout << "Unknown command" << std::endl;
@@ -384,6 +432,8 @@ void saveFileSystem(TreeNode* root) {
     rename("filesystem.txt.tmp", "filesystem.txt");
 }
 
+
+
 TreeNode* loadFileSystem() {
     ifstream file("filesystem.txt");
 
@@ -415,7 +465,7 @@ TreeNode* loadFileSystem() {
             // restore content
             stringstream cs(content);
             string line;
-            while (getline(cs, line, '\n')) {
+            while (getline(cs, line)) {
                 node->contents.push_back(line);
             }
         }
@@ -521,12 +571,21 @@ list<string> find_names(TreeNode *root, TreeNode *pwd, string name)
 
 TreeNode *find_node(TreeNode *root, TreeNode *pwd, string path)
 {
+    // 🔥 DIRECT FILE IN CURRENT DIRECTORY
+    if (path.find('/') == string::npos)
+    {
+        return find_on_pwd(pwd->child, path);
+    }
+
     list<string> paths = split(path, '/');
     string last = paths.back();
     paths.pop_back();
     string prev = join(paths, '/');
+
     TreeNode *temp = cd(root, pwd, prev);
-    return find_on_pwd(temp, last);
+    if (!temp) return nullptr;
+
+    return find_on_pwd(temp->child, last);
 }
 
 TreeNode *find_on_pwd(TreeNode *pwd, string name)
@@ -633,16 +692,29 @@ TreeNode *cd(TreeNode *root, TreeNode *pwd, string path)
 
 TreeNode *create(TreeNode *root, TreeNode *pwd, string path, char type)
 {
-    string *paths = split_name(path); 
+    // 🔹 split path first
+    string *paths = split_name(path);
+
+    // 🔹 find directory
     TreeNode *dir = cd(root, pwd, paths[0]);
     if (dir == nullptr)
     {
         return nullptr;
     }
+
+    // 🔥 CHECK IF FILE ALREADY EXISTS (NOW SAFE)
+    if (find_on_pwd(dir->child, paths[1]) != nullptr)
+    {
+        cout << "create: '" << path << "' already exists\n";
+        return nullptr;
+    }
+
+    // 🔹 create new node
     TreeNode *newNode = new TreeNode(dir, paths[1]);
     newNode->type = type;
     newNode->link = dir->child;
     dir->child = newNode;
+
     if (type == 'd')
     {
         cout << "mkdir: created directory '" << path << "'" << endl;
@@ -651,6 +723,7 @@ TreeNode *create(TreeNode *root, TreeNode *pwd, string path, char type)
     {
         cout << "touch: created file '" << path << "'" << endl;
     }
+
     return newNode;
 }
 
@@ -807,4 +880,162 @@ string curr_time()
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
+}
+
+int compileFile(TreeNode *root, TreeNode *pwd, string path)
+{
+    TreeNode *file = find_node(root, pwd, path);
+
+    if (!file)
+    {
+        cout << "compile: file not found\n";
+        return -1;
+    }
+
+    ofstream out("temp.cpp");
+
+    for (auto &line : file->contents)
+    {
+        out << line << "\n";
+    }
+    out.close();
+
+    int result = system("g++ temp.cpp -o temp.exe");
+
+    if (result == 0)
+    {
+        cout << "Compilation successful\n";
+        return 0;
+    }
+    else
+    {
+        cout << "Compilation failed\n";
+        return -1;
+    }
+}
+void runFile(TreeNode *root, TreeNode *pwd, string path)
+{
+    int status = compileFile(root, pwd, path);
+
+    if (status != 0)
+    {
+        cout << "Run aborted due to compilation error\n";
+        return;
+    }
+
+    cout << "Running program...\n";
+    system("temp.exe");   // ✅ FIXED
+}
+
+void collectFiles(TreeNode* node, string path,
+                  vector<pair<string,string>>& files)
+{
+    if (!node) return;
+
+    string fullPath = path + "/" + node->name;
+
+    if (node->type == '-')  // file
+    {
+        string content = "";
+        for (auto &line : node->contents)
+            content += line + " ";
+
+        files.push_back({fullPath, content});
+    }
+
+    collectFiles(node->child, fullPath, files);
+    collectFiles(node->link, path, files);
+}
+
+string buildJSON(vector<pair<string,string>>& files, string query)
+{
+    string json = "{ \"query\": \"" + query + "\", \"files\": [";
+
+    for (int i = 0; i < files.size(); i++)
+    {
+        json += "{ \"path\": \"" + files[i].first +
+                "\", \"content\": \"" + files[i].second + "\" }";
+
+        if (i != files.size() - 1)
+            json += ",";
+    }
+
+    json += "]}";
+    return json;
+}
+
+string sendRequest(string jsonData)
+{
+    // 🔹 write JSON to file
+    ofstream out("input.json");
+    out << jsonData;
+    out.close();
+
+    // 🔹 call python script
+    system("python client.py");
+
+    // 🔹 read response
+    ifstream in("output.txt");
+    string response((istreambuf_iterator<char>(in)),
+                     istreambuf_iterator<char>());
+
+    return response;
+}
+
+void smartFind(TreeNode* root, string query)
+{
+    vector<pair<string,string>> files;
+
+    collectFiles(root->child, "", files);
+
+    if (files.empty())
+    {
+        cout << "No files found\n";
+        return;
+    }
+
+    string jsonData = buildJSON(files, query);
+
+    string response = sendRequest(jsonData);
+
+    // 🔥 CLEAN OUTPUT
+    cout << "\nBest Matches:\n";
+
+    int rank = 1;
+    size_t pos = 0;
+
+    while ((pos = response.find("\"path\"")) != string::npos)
+    {
+        size_t start = response.find("\"", pos + 7);
+        if (start == string::npos) break;
+        start++;
+
+        size_t end = response.find("\"", start);
+        if (end == string::npos) break;
+
+        string path = response.substr(start, end - start);
+
+        size_t scorePos = response.find("\"score\"", end);
+        if (scorePos == string::npos) break;
+
+        size_t scoreStart = response.find(":", scorePos);
+        if (scoreStart == string::npos) break;
+        scoreStart++;
+
+        size_t scoreEnd = response.find(",", scoreStart);
+        if (scoreEnd == string::npos)
+            scoreEnd = response.find("}", scoreStart);
+
+        if (scoreEnd == string::npos) break;
+
+        string score = response.substr(scoreStart, scoreEnd - scoreStart);
+
+        // 🔥 CLEAN EXTRA CHARACTERS
+        score.erase(remove(score.begin(), score.end(), '}'), score.end());
+        score.erase(remove(score.begin(), score.end(), ']'), score.end());
+
+        cout << rank++ << ". " << path << " (Score:" << score << ")\n";
+
+        response = response.substr(scoreEnd);
+    }
 }

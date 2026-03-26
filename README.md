@@ -128,3 +128,7 @@ To compile and run the program, follow these steps:
 
    - ./fs_simulator
 
+
+ - First install curl
+ - then compile like this
+```g++ main.cpp -o main -I C:\curl\include -L C:\curl\lib -lcurl -lws2_32 -lssl -lcrypto```
