@@ -5,6 +5,7 @@
 #include <sstream>
 #include <iostream>
 #include <unordered_map>
+#include <fstream>
 
 using namespace std;
 
@@ -39,7 +40,9 @@ public:
 
     ~TreeNode() = default;
 };
-
+void saveDFS(TreeNode* node, string path, ofstream &file);
+TreeNode* loadFileSystem();
+void saveFileSystem(TreeNode* root);
 void linux_tree(TreeNode *root);
 void print_help();
 void print_tree(TreeNode *root, string prev);
@@ -63,10 +66,16 @@ void clear_screen();
 
 int main()
 {
-    TreeNode *root = new TreeNode(nullptr, "");
-    root->type = 'd';
+    TreeNode *root = loadFileSystem();
+
+    if (root == nullptr) {
+        root = new TreeNode(nullptr, "");
+        root->type = 'd';
+        linux_tree(root);   // only first time
+        saveFileSystem(root);
+    }
+
     TreeNode *pwd = root;
-    linux_tree(root);
 
     cout << endl;
     print_help();
@@ -74,7 +83,7 @@ int main()
     std::string cmd;
     std::cout << std::endl
               << pwd_str(root, pwd) << ">> ";
-    while (std::getline(std::cin >> std::ws, cmd))
+    while (std::getline(std::cin >> std::ws, cmd)) //ws: leading white spaces
     {
         std::list<std::string> args = split(cmd, ' ');
         TreeNode *temp_pwd = nullptr;
@@ -307,6 +316,7 @@ int main()
             std::cout << "Unknown command" << std::endl;
         }
 
+        saveFileSystem(root);
         std::cout << std::endl
                   << pwd_str(root, pwd) << ">> ";
     }
@@ -339,6 +349,79 @@ void print_help()
     std::cout << "\tchmod M P -   change permissions of the file at path P to mode M" << std::endl;
     std::cout << "\tclear     -   clear the console screen" << std::endl;
     std::cout << "\texit      -   exit the shell" << std::endl;
+}
+
+void saveDFS(TreeNode* node, string path, ofstream &file) {
+    if (!node) return;
+
+    string fullPath = path + "/" + node->name;
+
+    // convert contents to single string
+    string contentStr = "";
+    for (auto &line : node->contents) {
+        contentStr += line + "\\n";
+    }
+
+    file << fullPath << "|"
+         << node->type << "|"
+         << node->permission << "|"
+         << node->cdate << "|"
+         << node->mdate << "|"
+         << contentStr << "\n";
+
+    saveDFS(node->child, fullPath, file);
+    saveDFS(node->link, path, file);
+}
+
+void saveFileSystem(TreeNode* root) {
+    ofstream file("filesystem.txt.tmp");
+
+    saveDFS(root, "", file);
+
+    file.close();
+
+    remove("filesystem.txt");
+    rename("filesystem.txt.tmp", "filesystem.txt");
+}
+
+TreeNode* loadFileSystem() {
+    ifstream file("filesystem.txt");
+
+    if (!file) return nullptr;
+
+    TreeNode* root = new TreeNode(nullptr, "");
+    root->type = 'd';
+
+    string line;
+    while (getline(file, line)) {
+        stringstream ss(line);
+
+        string path, type, perm, cdate, mdate, content;
+
+        getline(ss, path, '|');
+        getline(ss, type, '|');
+        getline(ss, perm, '|');
+        getline(ss, cdate, '|');
+        getline(ss, mdate, '|');
+        getline(ss, content);
+
+        TreeNode* node = create(root, root, path.substr(1), type[0]);
+
+        if (node) {
+            node->permission = stoi(perm);
+            node->cdate = cdate;
+            node->mdate = mdate;
+
+            // restore content
+            stringstream cs(content);
+            string line;
+            while (getline(cs, line, '\n')) {
+                node->contents.push_back(line);
+            }
+        }
+    }
+
+    return root;
 }
 
 void linux_tree(TreeNode *root)
@@ -501,6 +584,9 @@ string join(list<string> str, char delim)
 
 string *split_name(string str)
 {
+// Splits the string into two parts at the last '/' — [directory, filename].
+// Returns a new string array of size 2; caller must delete[] the returned pointer.
+
     size_t pos = str.find_last_of('/');
     if (pos == string::npos)
     {
@@ -547,7 +633,7 @@ TreeNode *cd(TreeNode *root, TreeNode *pwd, string path)
 
 TreeNode *create(TreeNode *root, TreeNode *pwd, string path, char type)
 {
-    string *paths = split_name(path);
+    string *paths = split_name(path); 
     TreeNode *dir = cd(root, pwd, paths[0]);
     if (dir == nullptr)
     {
